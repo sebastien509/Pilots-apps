@@ -11,23 +11,33 @@ import { contextRouter } from './routes/context.js';
 
 const app = express();
 
-/** CORS allowlist (add any other SPA domains if needed) */
-const ALLOWLIST = [
-  'https://healthtech-spa.vercel.app',
-  'https://fintech-spa.vercel.app',
+// --- CORS allowlist (prod + previews + local) ---
+const ORIGIN_RULES = [
+  // Production domains you gave me:
+  /^https:\/\/healthtech-spa(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+  /^https:\/\/fintech-spa-tan(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+
+  // Local dev
   'http://localhost:5173',
   'http://localhost:5174',
 ];
 
+function isAllowedOrigin(origin) {
+  return ORIGIN_RULES.some(rule =>
+    typeof rule === 'string' ? rule === origin : rule.test(origin)
+  );
+}
+
 const corsOptions = {
   origin(origin, cb) {
-    // allow server-to-server tools (no Origin header)
+    // allow server-to-server / curl (no Origin header)
     if (!origin) return cb(null, true);
-    if (ALLOWLIST.includes(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'X-Org-Key'],
+  // include both cases to satisfy strict preflight checks
+  allowedHeaders: ['Content-Type', 'X-Org-Key', 'x-org-key'],
   maxAge: 86400,
   credentials: false,
 };
