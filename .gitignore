@@ -1,0 +1,10 @@
+
+node_modules/
+dist/
+.vite/
+.vercel/
+# Env
+.env
+.env.*
+# Misc
+.DS_Store

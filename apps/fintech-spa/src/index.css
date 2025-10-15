@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* animated banking grid */
+.animated-grid {
+background-image: linear-gradient(rgba(96,165,250,0.12) 1px, transparent 1px),
+linear-gradient(90deg, rgba(96,165,250,0.12) 1px, transparent 1px);
+background-size: 24px 24px;
+animation: gridmove 20s linear infinite;
+}

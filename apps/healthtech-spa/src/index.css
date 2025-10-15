@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* glass borders */
+.glass { background: theme(colors.health.glass); backdrop-filter: blur(10px); }
+.grid-bg { background-image: radial-gradient(rgba(110,231,183,0.08) 1px, transparent 1px); background-size: 24px 24px; }
