@@ -77,6 +77,12 @@ app.get('/', (_req, res) => {
   );
 });
 
+// in api/index.js, after other routes
+app.post('/osdk/ping', (req, res) => {
+  res.json({ ok: true, echo: req.body ?? null });
+});
+
+
 // Export the Express app for Vercel
 export default app;
 
