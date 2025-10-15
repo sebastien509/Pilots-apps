@@ -26,6 +26,17 @@ app.get("/health", (req, res) => {
   });
 });
 
+// in api/index.js (after your other routes)
+app.get('/', (_req, res) => {
+  res.type('text/plain').send([
+    'Inthra API',
+    'Endpoints:',
+    '  • GET  /health',
+    '  • POST /osdk/chat',
+  ].join('\n'));
+});
+
+
 export default app;               // <— This is what Vercel runs
 
 // Local-only
