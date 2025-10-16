@@ -1,122 +1,146 @@
+// api/routes/osdk.js
 import { v4 as uuid } from 'uuid';
-import { getOrgByKey } from '../db.js';
 
-// External OSDK endpoints
-const BASE = process.env.OSDK_GATEWAY_URL;   // e.g. https://iosdk.onrender.com
-const CP   = process.env.OSDK_CP_URL;        // optional: control-plane ingest
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // server-side key (external only)
+// ----- Config / ENV -----
+const BASE = (process.env.OSDK_GATEWAY_URL || '').replace(/\/+$/, ''); // e.g. https://iosdk.onrender.com
+const CP   = process.env.OSDK_CP_URL || '';                            // optional control-plane ingest
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';               // optional BYOK header
+const ALLOW_NO_DB = process.env.ALLOW_NO_DB === 'true';                // set true in Vercel while debugging
 
-// Map browser-provided policyKey → OSDK purpose string
-// (You can expand this as you wish.)
+// Map browser policyKey → OSDK purpose
 const PURPOSE_MAP = {
-  'health_pii_phi': 'health.intake',
-  'fin_pci_pii': 'fintech.fraud_explainer', // uses external provider by policy
+  health_pii_phi: 'health.intake',
+  fin_pci_pii: 'fintech.fraud_explainer',
 };
 
 async function cpPost(evt) {
   if (!CP) return;
   try {
-    await fetch(`${CP}/ingest`, {
+    await fetch(`${CP.replace(/\/+$/,'')}/ingest`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(evt)
+      body: JSON.stringify(evt),
     });
-  } catch { /* non-blocking */ }
+  } catch {
+    /* non-blocking */
+  }
 }
 
 export function osdkRouter(app) {
+  // Simple sanity route to test CORS and body parsing
+  app.post('/osdk/ping', (req, res) => res.json({ ok: true, echo: req.body || {} }));
+
   app.post('/osdk/chat', async (req, res) => {
+    const t0 = Date.now();
     try {
-      const orgKey = req.header('X-Org-Key');
-      if (!orgKey) return res.status(401).json({ error: 'missing org key' });
-
-      // (Optional) verify org exists in DB
-      const org = await getOrgByKey(orgKey);
-      if (!org) return res.status(403).json({ error: 'invalid org key' });
-
+      const orgKey = req.get('X-Org-Key') || 'DEMO_ORG_KEY';
       const { messages = [], policyKey, subject_id = 'web-demo-user', context_id } = req.body || {};
+
+      if (!policyKey || !Array.isArray(messages)) {
+        return res.status(400).json({ error: 'bad_request' });
+      }
+
+      // (Optional) verify org in DB unless bypassing
+      if (!ALLOW_NO_DB) {
+        try {
+          const { getOrgByKey } = await import('../db.js');
+          const org = await getOrgByKey(orgKey);
+          if (!org) return res.status(403).json({ error: 'invalid_org_key' });
+        } catch (e) {
+          console.error('[osdk/chat] db error:', e?.message);
+          return res.status(500).json({ error: 'db_unavailable' });
+        }
+      } else {
+        console.log('[osdk/chat] ALLOW_NO_DB=true — skipping org lookup');
+      }
+
       const purpose = PURPOSE_MAP[policyKey] || 'notes.summarization';
       const session = `sess-${uuid()}`;
 
-      await cpPost({ type: 'begin', ts: Date.now() / 1000, session, meta: { orgKey, purpose, policyKey } });
+      await cpPost({ type: 'begin', ts: Date.now()/1000, session, meta: { orgKey, purpose, policyKey } });
 
-      // Optional: pull a saved context for quick "rehydrate"
+      // Optional: pull a saved context
       const prepend = [];
       if (context_id && process.env.INTERNAL_CONTEXT_URL) {
         try {
-          const r = await fetch(`${process.env.INTERNAL_CONTEXT_URL}/api/contexts/${context_id}`, {
+          const r = await fetch(`${process.env.INTERNAL_CONTEXT_URL.replace(/\/+$/,'')}/api/contexts/${context_id}`, {
             headers: { 'X-Org-Key': orgKey }
           });
           if (r.ok) {
             const ctx = await r.json();
             prepend.push({ role: 'system', content: `Context: ${JSON.stringify(ctx.json)}` });
           }
-        } catch { /* ignore */ }
+        } catch {/* ignore */}
       }
 
-      // 1) Create consent on OSDK
+      // If gateway isn’t configured, return a stubbed response so the apps keep working
+      if (!BASE) {
+        console.warn('[osdk/chat] OSDK_GATEWAY_URL is not set — returning stubbed response');
+        return res.json({
+          content: `🧪 Stubbed response (no gateway).\npurpose=${purpose}\nmessages=${JSON.stringify(messages)}`,
+          meta: { session, purpose, stub: true, elapsed_ms: Date.now() - t0 },
+        });
+      }
+
+      // 1) Create consent
       const cResp = await fetch(`${BASE}/v1/consent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ subject_id, purpose })
+        body: JSON.stringify({ subject_id, purpose }),
       });
 
       if (!cResp.ok) {
-        const text = await cResp.text();
-        await cpPost({ type: 'event', ts: Date.now()/1000, session, name: 'consent.error', data: { text } });
+        const text = await cResp.text().catch(() => '');
+        console.error('[osdk/chat] consent_failed', cResp.status, text);
+        await cpPost({ type: 'event', ts: Date.now()/1000, session, name: 'consent.error', data: { status: cResp.status, text: text.slice(0, 300) } });
         return res.status(502).json({ error: 'consent_failed' });
       }
       const { id: consent_id } = await cResp.json();
 
-      // 2) Chat via OSDK (external OpenAI by policy/purpose)
+      // 2) Chat via gateway
       const headers = { 'content-type': 'application/json' };
-
-      // If your gateway expects BYOK header for provider auth:
       if (OPENAI_API_KEY) {
+        // If your gateway expects BYOK in this header
         headers['X-Provider-Auth'] = JSON.stringify({ openai: { api_key: OPENAI_API_KEY } });
       }
 
-      const chatBody = {
+      const body = {
         consent_id,
         purpose,
         messages: [...prepend, ...messages],
-        // route external to OpenAI (policy will allow/deny)
-        model: { provider: 'openai', model: 'gpt-4.1-mini' }
+        model: { provider: 'openai', model: 'gpt-4.1-mini' },
       };
 
       const gw = await fetch(`${BASE}/v1/llm/chat`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(chatBody)
+        body: JSON.stringify(body),
       });
 
       if (!gw.ok) {
-        const text = await gw.text();
-        await cpPost({ type: 'event', ts: Date.now()/1000, session, name: 'gateway.error', data: { text } });
+        const text = await gw.text().catch(() => '');
+        console.error('[osdk/chat] gateway_failed', gw.status, text);
+        await cpPost({ type: 'event', ts: Date.now()/1000, session, name: 'gateway.error', data: { status: gw.status, text: text.slice(0, 300) } });
         await cpPost({ type: 'end', ts: Date.now()/1000, session, ok: false });
         return res.status(502).json({ error: 'gateway_failed' });
       }
 
       const data = await gw.json();
-      const content =
-        data?.final_output ??
-        data?.result?.message?.content ??
-        '';
+      const content = data?.final_output ?? data?.result?.message?.content ?? '';
 
       await cpPost({
         type: 'end',
-        ts: Date.now() / 1000,
+        ts: Date.now()/1000,
         session,
         ok: true,
-        summary: { chars: (content || '').length, consent_id, purpose }
+        summary: { chars: (content || '').length, consent_id, purpose },
       });
 
-      // Minimal browser payload (no secrets)
-      res.json({ content, meta: { session, purpose, consent_id } });
+      return res.json({ content, meta: { session, purpose, consent_id, elapsed_ms: Date.now() - t0 } });
 
     } catch (e) {
-      console.error('[osdk/chat] error', e);
-      res.status(500).json({ error: 'internal' });
+      console.error('[osdk/chat] error', { message: e?.message, stack: e?.stack, BASE: BASE || '(unset)' });
+      return res.status(500).json({ error: 'internal' });
     }
   });
 }
