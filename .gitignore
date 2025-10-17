@@ -8,3 +8,4 @@ dist/
 .env.*
 # Misc
 .DS_Store
+.vercel

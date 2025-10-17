@@ -8,6 +8,8 @@ import morgan from 'morgan';
 import { osdkRouter } from './routes/osdk.js';
 import { consentRouter } from './routes/consent.js';
 import { contextRouter } from './routes/context.js';
+import { osdkProxyRoutes } from './routes/osdk_proxies.js';
+
 
 const app = express();
 
@@ -55,6 +57,8 @@ app.use(morgan('tiny'));
 osdkRouter(app);
 consentRouter(app);
 contextRouter(app);
+osdkProxyRoutes(app);
+
 
 // Healthcheck
 app.get('/health', (req, res) => {

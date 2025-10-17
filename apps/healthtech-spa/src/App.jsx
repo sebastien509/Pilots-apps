@@ -189,7 +189,7 @@ export default function App() {
                   type="text"
                   value={form[k]}
                   onChange={e => setForm({ ...form, [k]: e.target.value })}
-                  className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl bg-white border border-gray-300 focus:outline-none focus:ring-2 sm:focus:ring-3 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all duration-200 text-sm sm:text-base"
+                  className="w-full px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl bg-white text-teal-700 border border-gray-300 focus:outline-none focus:ring-2 sm:focus:ring-3 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all duration-200 text-sm sm:text-base"
                 />
               </label>
             ))}

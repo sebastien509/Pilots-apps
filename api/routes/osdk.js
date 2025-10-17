@@ -13,6 +13,17 @@ const PURPOSE_MAP = {
   fin_pci_pii: 'fintech.fraud_explainer',
 };
 
+function resolveOrgKey(req) {
+  // choose your truth source; header works well when SPA sets it
+  return (
+    req.get('x-org-key') ||
+    (req.user && req.user.org_key) ||
+    req.cookies?.org_key ||
+    process.env.ORG_KEY ||
+    'DEMO_ORG_KEY'
+  );
+}
+
 async function cpPost(evt) {
   if (!CP) return;
   try {
@@ -27,20 +38,21 @@ async function cpPost(evt) {
 }
 
 export function osdkRouter(app) {
-  // Simple sanity route to test CORS and body parsing
+  // Sanity: CORS + body parsing
   app.post('/osdk/ping', (req, res) => res.json({ ok: true, echo: req.body || {} }));
 
+  // Main chat entrypoint used by your SPA(s)
   app.post('/osdk/chat', async (req, res) => {
     const t0 = Date.now();
     try {
-      const orgKey = req.get('X-Org-Key') || 'DEMO_ORG_KEY';
+      const orgKey = resolveOrgKey(req);
       const { messages = [], policyKey, subject_id = 'web-demo-user', context_id } = req.body || {};
 
       if (!policyKey || !Array.isArray(messages)) {
         return res.status(400).json({ error: 'bad_request' });
       }
 
-      // (Optional) verify org in DB unless bypassing
+      // Optional org key validation (DB)
       if (!ALLOW_NO_DB) {
         try {
           const { getOrgByKey } = await import('../db.js');
@@ -59,7 +71,7 @@ export function osdkRouter(app) {
 
       await cpPost({ type: 'begin', ts: Date.now()/1000, session, meta: { orgKey, purpose, policyKey } });
 
-      // Optional: pull a saved context
+      // Optional: prepend internal context
       const prepend = [];
       if (context_id && process.env.INTERNAL_CONTEXT_URL) {
         try {
@@ -73,7 +85,7 @@ export function osdkRouter(app) {
         } catch {/* ignore */}
       }
 
-      // If gateway isn’t configured, return a stubbed response so the apps keep working
+      // If gateway isn’t configured, stub
       if (!BASE) {
         console.warn('[osdk/chat] OSDK_GATEWAY_URL is not set — returning stubbed response');
         return res.json({
@@ -82,11 +94,15 @@ export function osdkRouter(app) {
         });
       }
 
-      // 1) Create consent
+      // 1) Create consent (authoritative source for org scoping)
       const cResp = await fetch(`${BASE}/v1/consent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ subject_id, purpose }),
+        body: JSON.stringify({
+          subject_id,
+          purpose,
+          metadata: { org_key: orgKey },   // <- tag consent with org
+        })
       });
 
       if (!cResp.ok) {
@@ -98,9 +114,8 @@ export function osdkRouter(app) {
       const { id: consent_id } = await cResp.json();
 
       // 2) Chat via gateway
-      const headers = { 'content-type': 'application/json' };
+      const headers = { 'content-type': 'application/json', 'X-Org-Key': orgKey }; // <- propagate org
       if (OPENAI_API_KEY) {
-        // If your gateway expects BYOK in this header
         headers['X-Provider-Auth'] = JSON.stringify({ openai: { api_key: OPENAI_API_KEY } });
       }
 
