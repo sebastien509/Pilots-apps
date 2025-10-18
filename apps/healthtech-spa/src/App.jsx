@@ -23,6 +23,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [open, setOpen] = useState(false);
+  const [lastSessionId, setLastSessionId] = useState(""); // set this from the chat response meta.session
+
 
   const prompt = useMemo(() => `Given the sanitized patient intake below, list 6–10 documents a patient should bring for hospital registration and care. Then add a short instruction block.\n\n${JSON.stringify(form)}`, [form]);
 
@@ -30,21 +32,28 @@ export default function App() {
     setLoading(true);
     setResult(null);
     try {
-      const { content } = await osdkChat({
+      // use the memoized healthcare prompt built from `form`
+      const resp = await osdkChat({
         policyKey: 'health_pii_phi',
         messages: [
           { role: 'system', content: 'You generate hospital document checklists.' },
-          { role: 'user', content: prompt }
-        ]
+          { role: 'user', content: prompt } // <-- from useMemo above
+        ],
       });
-      setResult(content);
+  
+      const { content, meta } = resp || {};
+      setResult(content || '');
       setOpen(true);
+  
+      // capture the session id for overlays/receipts (whatever the key is)
+      setLastSessionId(meta?.session || meta?.session_id || meta?.sessionId || "");
     } catch (e) {
       alert(e.message);
     } finally {
       setLoading(false);
     }
   }
+  
 
   function exportMD() {
     const md = `# Hospital Document Checklist\n\n**Patient (sanitized)**: ${form.full_name}\n\n${result}`;
@@ -252,6 +261,7 @@ export default function App() {
       <Modal 
         open={open} 
         onClose={() => setOpen(false)} 
+        sessionId={lastSessionId} 
         title="Hospital Document Checklist"
         actions={[
           <button key="md" onClick={exportMD} className="px-4 py-2 rounded-lg bg-blue-500 text-white font-medium hover:bg-blue-600 transition-colors text-sm sm:text-base">

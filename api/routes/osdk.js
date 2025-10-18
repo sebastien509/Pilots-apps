@@ -124,6 +124,7 @@ export function osdkRouter(app) {
         purpose,
         messages: [...prepend, ...messages],
         model: { provider: 'openai', model: 'gpt-4.1-mini' },
+        session_id: session, // <- ensure gateway stores overlay/receipt under our session id
       };
 
       const gw = await fetch(`${BASE}/v1/llm/chat`, {
@@ -142,16 +143,17 @@ export function osdkRouter(app) {
 
       const data = await gw.json();
       const content = data?.final_output ?? data?.result?.message?.content ?? '';
+      const gwSession = data?.session_id || session;
 
       await cpPost({
         type: 'end',
         ts: Date.now()/1000,
-        session,
+        session: gwSession,
         ok: true,
         summary: { chars: (content || '').length, consent_id, purpose },
       });
 
-      return res.json({ content, meta: { session, purpose, consent_id, elapsed_ms: Date.now() - t0 } });
+      return res.json({ content, meta: { session: gwSession, purpose, consent_id, elapsed_ms: Date.now() - t0 } });
 
     } catch (e) {
       console.error('[osdk/chat] error', { message: e?.message, stack: e?.stack, BASE: BASE || '(unset)' });
